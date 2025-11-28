@@ -1,0 +1,34 @@
+{
+  "name": "websocket-server",
+  "version": "1.0.0",
+  "description": "Servidor WebSocket central para distribuição de dados de simuladores",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit",
+    "test:input": "tsx examples/input-client.ts",
+    "test:output": "tsx examples/output-client.ts",
+    "test:sim1": "SIM_ID=1 tsx examples/input-client.ts",
+    "test:sim2": "SIM_ID=2 tsx examples/input-client.ts",
+    "test:sim3": "SIM_ID=3 tsx examples/input-client.ts"
+  },
+  "keywords": [
+    "websocket",
+    "simulator",
+    "real-time"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
