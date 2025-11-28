@@ -4,3 +4,6 @@ dist/
 .env
 .DS_Store
 *.tsbuildinfo
+start.sh
+start.bat
+DOCKER.md
