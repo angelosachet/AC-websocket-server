@@ -11,6 +11,9 @@ import {
   getEventData,
   listEvents,
   flushPendingWrites,
+  reloadAllEvents,
+  reloadEventData,
+  initFileWatcher,
 } from "./best-lap-tracker.js";
 
 /**
@@ -83,6 +86,11 @@ export class WebSocketSimulatorServer {
 
     if (parsedUrl.pathname === "/events") {
       this.handleEventsRequest(req, res);
+      return;
+    }
+
+    if (parsedUrl.pathname === "/reload") {
+      this.handleReloadRequest(req, res);
       return;
     }
 
@@ -167,6 +175,72 @@ export class WebSocketSimulatorServer {
     // Método não permitido
     res.writeHead(405, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Método não permitido" }));
+  }
+
+  /**
+   * Trata requisições para o endpoint /reload
+   */
+  private handleReloadRequest(req: IncomingMessage, res: any): void {
+    if (req.method === "POST") {
+      let body = "";
+
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+      });
+
+      req.on("end", async () => {
+        try {
+          const data = body ? JSON.parse(body) : {};
+          const { eventName } = data;
+
+          if (eventName) {
+            // Recarregar evento específico
+            await reloadEventData(eventName);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                success: true,
+                message: `Evento '${eventName}' recarregado com sucesso`,
+                eventName,
+              })
+            );
+          } else {
+            // Recarregar todos os eventos
+            await reloadAllEvents();
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+              JSON.stringify({
+                success: true,
+                message: "Todos os eventos recarregados com sucesso",
+              })
+            );
+          }
+        } catch (error) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({
+              success: false,
+              error: "Erro ao recarregar dados",
+              message: (error as Error).message,
+            })
+          );
+        }
+      });
+
+      return;
+    }
+
+    // Método não permitido
+    res.writeHead(405, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        error: "Método não permitido. Use POST",
+        usage: {
+          reloadAll: "POST /reload (sem body)",
+          reloadEvent: 'POST /reload {"eventName": "nome-do-evento"}',
+        },
+      })
+    );
   }
 
   /**
@@ -322,6 +396,13 @@ export class WebSocketSimulatorServer {
         logger.info(
           `   📊 Stats:          http://${this.config.host}:${this.config.port}/stats`
         );
+        logger.info(
+          `   🔄 Reload:         http://${this.config.host}:${this.config.port}/reload`
+        );
+
+        // Inicializar file watcher para hot reload automático
+        initFileWatcher();
+
         resolve();
       });
     });

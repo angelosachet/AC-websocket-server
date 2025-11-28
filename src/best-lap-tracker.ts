@@ -1,6 +1,7 @@
 import { promises as fs } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import chokidar from "chokidar";
 import type { RawSimulatorData } from "./types.js";
 import { logger } from "./logger.js";
 
@@ -298,4 +299,128 @@ export async function flushPendingWrites(): Promise<void> {
   await Promise.all(promises);
   pendingWrites.clear();
   logger.info("Gravação de dados pendentes concluída");
+}
+
+/**
+ * Invalida o cache de um evento específico
+ */
+export function invalidateCache(eventName?: string): void {
+  if (eventName) {
+    eventCache.delete(eventName);
+    logger.info(`Cache invalidado para evento: ${eventName}`);
+  } else {
+    eventCache.clear();
+    logger.info("Cache completo invalidado");
+  }
+}
+
+/**
+ * Recarrega dados de um evento do filesystem
+ */
+export async function reloadEventData(eventName: string): Promise<void> {
+  invalidateCache(eventName);
+  await loadEventData(eventName);
+  logger.info(`Dados recarregados para evento: ${eventName}`);
+}
+
+/**
+ * Recarrega todos os eventos do filesystem
+ */
+export async function reloadAllEvents(): Promise<void> {
+  invalidateCache(); // Limpa todo o cache
+
+  try {
+    const files = await fs.readdir(DATA_DIR);
+    const jsonFiles = files.filter((f) => f.endsWith(".json"));
+
+    for (const file of jsonFiles) {
+      const filepath = join(DATA_DIR, file);
+      const content = await fs.readFile(filepath, "utf-8");
+      const data = JSON.parse(content);
+
+      if (data.eventName) {
+        eventCache.set(data.eventName, data);
+      }
+    }
+
+    logger.info(`Cache recarregado com ${jsonFiles.length} evento(s)`);
+  } catch (error) {
+    logger.error("Erro ao recarregar eventos", {
+      error: (error as Error).message,
+    });
+  }
+}
+
+/**
+ * Inicializa file watcher para detectar mudanças nos arquivos JSON
+ */
+export function initFileWatcher(): void {
+  const watchPattern = join(DATA_DIR, "*.json");
+
+  const watcher = chokidar.watch(watchPattern, {
+    persistent: true,
+    ignoreInitial: true,
+    // Use polling for better compatibility com bind mounts / Docker volumes
+    usePolling: true,
+    interval: 1000,
+    binaryInterval: 1000,
+    awaitWriteFinish: {
+      stabilityThreshold: 500,
+      pollInterval: 100,
+    },
+  });
+
+  logger.info(`📂 Iniciando file watcher em: ${watchPattern}`);
+
+  watcher
+    .on("change", async (filepath) => {
+      const filename = filepath.split("/").pop() || "";
+      logger.info(`📝 Arquivo modificado detectado: ${filename}`);
+
+      try {
+        const content = await fs.readFile(filepath, "utf-8");
+        const data = JSON.parse(content);
+
+        // Se o JSON declarar eventName, usar esse; senão inferir do nome do arquivo
+        const eventName = data.eventName || filename.replace(".json", "");
+
+        // Invalida e recarrega formalmente para manter o fluxo consistente
+        invalidateCache(eventName);
+
+        try {
+          // Colocar no cache o conteúdo atualizado
+          eventCache.set(eventName, data);
+          logger.info(`✅ Cache atualizado para evento: ${eventName}`);
+        } catch (err) {
+          logger.error(`Erro ao atualizar cache para ${eventName}`, {
+            error: (err as Error).message,
+          });
+        }
+      } catch (error) {
+        logger.error(`Erro ao recarregar arquivo ${filename}`, {
+          error: (error as Error).message,
+        });
+      }
+    })
+    .on("unlink", (filepath) => {
+      const filename = filepath.split("/").pop() || "";
+      logger.info(`🗑️ Arquivo removido: ${filename}`);
+      // Tentar remover do cache baseado no nome do arquivo
+      const inferredName = filename.replace(".json", "");
+      // Procurar por entradas cujo sanitized name bata com o arquivo
+      for (const [eventName] of eventCache.entries()) {
+        if (sanitizeEventName(eventName) === inferredName) {
+          invalidateCache(eventName);
+          break;
+        }
+      }
+    })
+    .on("error", (error) => {
+      logger.error("Erro no file watcher", { error: (error as Error).message });
+    })
+    .on("ready", () => {
+      logger.info("✅ File watcher pronto");
+    });
+
+  logger.info("🔍 File watcher iniciado para " + join(DATA_DIR, "*.json"));
 }
