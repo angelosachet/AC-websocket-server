@@ -43,16 +43,17 @@ export class WebSocketSimulatorServer {
   }
 
   /**
-   * Headers CORS para permitir requisições de qualquer origem
+   * Helper para obter headers completos (CORS + Content-Type)
    */
-  private setCorsHeaders(res: any): void {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
-    res.setHeader("Access-Control-Max-Age", "86400"); // 24 horas
+  private getHeaders(contentType = "application/json"): Record<string, string> {
+    return {
+      "Content-Type": contentType,
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS, PUT, DELETE",
+      "Access-Control-Allow-Headers": "*",
+      "Access-Control-Expose-Headers": "*",
+      "Access-Control-Max-Age": "86400",
+    };
   }
 
   /**
@@ -61,25 +62,23 @@ export class WebSocketSimulatorServer {
   private handleHttpRequest(req: IncomingMessage, res: any): void {
     const parsedUrl = parse(req.url || "", true);
 
-    // Adicionar headers CORS em todas as respostas
-    this.setCorsHeaders(res);
-
     // Tratar preflight requests (OPTIONS)
     if (req.method === "OPTIONS") {
-      res.writeHead(204);
+      logger.info(`OPTIONS ${parsedUrl.pathname} - Sending CORS headers`);
+      res.writeHead(200, this.getHeaders());
       res.end();
       return;
     }
 
     if (parsedUrl.pathname === "/health") {
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, this.getHeaders());
       res.end(JSON.stringify({ status: "ok", uptime: process.uptime() }));
       return;
     }
 
     if (parsedUrl.pathname === "/stats") {
       const stats = this.connectionManager.getStats();
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, this.getHeaders());
       res.end(JSON.stringify(stats));
       return;
     }
@@ -106,11 +105,11 @@ export class WebSocketSimulatorServer {
       // Listar todos os eventos
       listEvents()
         .then((events) => {
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, this.getHeaders());
           res.end(JSON.stringify({ events }));
         })
         .catch((error) => {
-          res.writeHead(500, { "Content-Type": "application/json" });
+          res.writeHead(500, this.getHeaders());
           res.end(
             JSON.stringify({
               error: "Erro ao listar eventos",
@@ -134,7 +133,7 @@ export class WebSocketSimulatorServer {
           const { eventName } = JSON.parse(body);
 
           if (!eventName) {
-            res.writeHead(400, { "Content-Type": "application/json" });
+            res.writeHead(400, this.getHeaders());
             res.end(
               JSON.stringify({
                 error: "Campo 'eventName' é obrigatório",
@@ -146,7 +145,7 @@ export class WebSocketSimulatorServer {
           const eventData = await getEventData(eventName);
 
           if (!eventData) {
-            res.writeHead(404, { "Content-Type": "application/json" });
+            res.writeHead(404, this.getHeaders());
             res.end(
               JSON.stringify({
                 error: "Evento não encontrado",
@@ -156,10 +155,10 @@ export class WebSocketSimulatorServer {
             return;
           }
 
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, this.getHeaders());
           res.end(JSON.stringify(eventData));
         } catch (error) {
-          res.writeHead(400, { "Content-Type": "application/json" });
+          res.writeHead(400, this.getHeaders());
           res.end(
             JSON.stringify({
               error: "JSON inválido ou erro ao processar",
@@ -173,7 +172,7 @@ export class WebSocketSimulatorServer {
     }
 
     // Método não permitido
-    res.writeHead(405, { "Content-Type": "application/json" });
+    res.writeHead(405, this.getHeaders());
     res.end(JSON.stringify({ error: "Método não permitido" }));
   }
 
@@ -196,7 +195,7 @@ export class WebSocketSimulatorServer {
           if (eventName) {
             // Recarregar evento específico
             await reloadEventData(eventName);
-            res.writeHead(200, { "Content-Type": "application/json" });
+            res.writeHead(200, this.getHeaders());
             res.end(
               JSON.stringify({
                 success: true,
@@ -207,7 +206,7 @@ export class WebSocketSimulatorServer {
           } else {
             // Recarregar todos os eventos
             await reloadAllEvents();
-            res.writeHead(200, { "Content-Type": "application/json" });
+            res.writeHead(200, this.getHeaders());
             res.end(
               JSON.stringify({
                 success: true,
@@ -216,7 +215,7 @@ export class WebSocketSimulatorServer {
             );
           }
         } catch (error) {
-          res.writeHead(500, { "Content-Type": "application/json" });
+          res.writeHead(500, this.getHeaders());
           res.end(
             JSON.stringify({
               success: false,
@@ -231,7 +230,7 @@ export class WebSocketSimulatorServer {
     }
 
     // Método não permitido
-    res.writeHead(405, { "Content-Type": "application/json" });
+    res.writeHead(405, this.getHeaders());
     res.end(
       JSON.stringify({
         error: "Método não permitido. Use POST",
@@ -292,17 +291,32 @@ export class WebSocketSimulatorServer {
 
     ws.on("message", (data: Buffer) => {
       try {
+        logger.debug("Mensagem recebida em /input", { raw: data.toString() });
         const message = JSON.parse(data.toString()) as InputMessage;
 
         // Validar mensagem
         if (message.type !== "simulator-update" || !message.data) {
-          logger.warn("Mensagem inválida recebida em /input", { message });
+          logger.warn("Mensagem inválida recebida em /input", { 
+            message,
+            esperado: { type: "simulator-update", data: "{...}" }
+          });
+          ws.send(JSON.stringify({
+            type: "error",
+            message: "Formato inválido. Esperado: {type: 'simulator-update', data: {...}}"
+          }));
           return;
         }
 
         // Validar dados essenciais
         if (!this.validateSimulatorData(message.data)) {
-          logger.warn("Dados de simulador inválidos", { data: message.data });
+          logger.warn("Dados de simulador inválidos", { 
+            data: message.data,
+            camposObrigatorios: ["simNum (1-3)", "pilot-name", "car", "track"]
+          });
+          ws.send(JSON.stringify({
+            type: "error",
+            message: "Dados inválidos. Campos obrigatórios: simNum (1-3), pilot-name, car, track"
+          }));
           return;
         }
 
