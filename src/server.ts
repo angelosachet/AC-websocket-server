@@ -93,6 +93,12 @@ export class WebSocketSimulatorServer {
       return;
     }
 
+    // HTTP POST endpoint for simulator data (fallback when WebSocket doesn't work)
+    if (parsedUrl.pathname === "/api/input" && req.method === "POST") {
+      this.handleHttpInput(req, res);
+      return;
+    }
+
     res.writeHead(404);
     res.end("Not Found");
   }
@@ -240,6 +246,63 @@ export class WebSocketSimulatorServer {
         },
       })
     );
+  }
+
+  /**
+   * Trata requisições HTTP POST para /api/input (fallback quando WebSocket não funciona)
+   */
+  private handleHttpInput(req: IncomingMessage, res: any): void {
+    let body = "";
+
+    req.on("data", (chunk) => {
+      body += chunk.toString();
+    });
+
+    req.on("end", async () => {
+      try {
+        const data = JSON.parse(body) as RawSimulatorData;
+
+        // Validar campos obrigatórios
+        if (!data["pilot-name"] || !data.event) {
+          res.writeHead(400, this.getHeaders());
+          res.end(JSON.stringify({
+            error: "Campos obrigatórios: pilot-name, event, bestTime ou bestLap"
+          }));
+          return;
+        }
+
+        logger.info(`📨 HTTP POST /api/input recebido`, {
+          pilot: data["pilot-name"],
+          event: data.event,
+          bestTime: data.bestTime,
+          bestLap: data.bestLap
+        });
+
+        // Processar e salvar melhor volta
+        await processBestLap(data);
+
+        // Broadcast para clientes OUTPUT (se houver)
+        this.connectionManager.broadcastToOutputs(data);
+
+        res.writeHead(200, this.getHeaders());
+        res.end(JSON.stringify({
+          success: true,
+          message: "Dados recebidos e processados",
+          pilot: data["pilot-name"],
+          event: data.event
+        }));
+
+      } catch (error) {
+        logger.error("Erro ao processar HTTP input", {
+          error: (error as Error).message
+        });
+        res.writeHead(400, this.getHeaders());
+        res.end(JSON.stringify({
+          error: "JSON inválido",
+          message: (error as Error).message
+        }));
+      }
+    });
   }
 
   /**
